@@ -1,0 +1,97 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+df = pd.read_csv("grocery_chain_data.csv")
+df.head()
+
+  # Fill missing store names
+df['store_name'] = df['store_name'].fillna('unknown_store')
+
+# Aggregate features per product
+product_features = df.groupby('product_name').agg(
+    avg_quantity=('quantity', 'mean'),
+    roll_mean_7=('quantity', lambda x: x.rolling(7, min_periods=1).mean().iloc[-1]),
+    roll_std_7=('quantity', lambda x: x.rolling(7, min_periods=1).std().iloc[-1]),
+    min_quantity=('quantity', 'min'),
+    max_quantity=('quantity', 'max'),
+    avg_unit_price=('unit_price', 'mean'),
+    category=('aisle', 'first')  # Keep category for reference
+).reset_index()
+
+# Handle NaNs in rolling std
+product_features['roll_std_7'] = product_features['roll_std_7'].fillna(0)
+
+product_features.head()
+
+from sklearn.preprocessing import StandardScaler
+
+features_to_scale = ['avg_quantity', 'roll_mean_7', 'roll_std_7', 'min_quantity', 'max_quantity', 'avg_unit_price']
+
+scaler = StandardScaler()
+product_scaled = scaler.fit_transform(product_features[features_to_scale])
+
+from sklearn.cluster import AgglomerativeClustering
+
+hc = AgglomerativeClustering(n_clusters=3, affinity='euclidean', linkage='ward')
+product_features['Cluster_HC'] = hc.fit_predict(product_scaled)
+
+from sklearn.metrics import silhouette_score, davies_bouldin_score
+
+sil_score = silhouette_score(product_scaled, product_features['Cluster_HC'])
+dbi = davies_bouldin_score(product_scaled, product_features['Cluster_HC'])
+
+print("Silhouette Score:", sil_score)
+print("Davies-Bouldin Index:", dbi)
+
+def label_cluster(row):
+    if row['avg_quantity'] > product_features['avg_quantity'].mean() and row['roll_std_7'] < product_features['roll_std_7'].mean():
+        return 'Stable / High-demand'
+    elif row['roll_std_7'] > product_features['roll_std_7'].mean():
+        return 'Volatile'
+    else:
+        return 'Slow-moving'
+
+product_features['Cluster_Label'] = product_features.apply(label_cluster, axis=1)
+
+product_features[['product_name', 'Cluster_HC', 'Cluster_Label', 'category', 'avg_unit_price', 'min_quantity', 'max_quantity']]
+from scipy.cluster.hierarchy import dendrogram, linkage
+import matplotlib.pyplot as plt
+
+linked = linkage(product_scaled, method='ward')
+
+plt.figure(figsize=(10, 5))
+dendrogram(
+    linked,
+    labels=product_features['product_name'].values,
+    leaf_rotation=90
+)
+plt.title("Hierarchical Clustering Dendrogram")
+plt.xlabel("Product")
+plt.ylabel("Distance")
+plt.show()
+
+from sklearn.decomposition import PCA
+
+pca = PCA(n_components=2)
+features_2d = pca.fit_transform(product_scaled)
+
+plt.figure(figsize=(8, 5))
+plt.scatter(
+    features_2d[:, 0],
+    features_2d[:, 1],
+    c=product_features['Cluster_HC'],
+    cmap='viridis'
+)
+
+for i, product in enumerate(product_features['product_name']):
+    plt.text(
+        features_2d[i, 0],
+        features_2d[i, 1],
+        product,
+        fontsize=8
+    )
+
+plt.title("Product Clusters (Hierarchical + PCA)")
+plt.xlabel("PCA Component 1")
+plt.ylabel("PCA Component 2")
+plt.show()
